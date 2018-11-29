@@ -23,6 +23,11 @@
 #include<algorithm>
 #include<fstream>
 #include<chrono>
+#include <geometry_msgs/PoseStamped.h> 
+#include <tf/tf.h> 
+#include <tf/transform_datatypes.h> 
+#include"../../../include/Converter.h"
+
 
 #include<ros/ros.h>
 #include <cv_bridge/cv_bridge.h>
@@ -37,10 +42,10 @@ class ImageGrabber
 {
 public:
     ImageGrabber(ORB_SLAM2::System* pSLAM):mpSLAM(pSLAM){}
-
     void GrabImage(const sensor_msgs::ImageConstPtr& msg);
-
     ORB_SLAM2::System* mpSLAM;
+    ros::NodeHandle nodeH;
+    ros::Publisher pose_pub = nodeH.advertise<geometry_msgs::PoseStamped> ( "/orb/pose_unscaled", 5 );
 };
 
 int main(int argc, char **argv)
@@ -59,12 +64,12 @@ int main(int argc, char **argv)
     ORB_SLAM2::System SLAM(argv[1],argv[2],ORB_SLAM2::System::MONOCULAR,true);
 
     ImageGrabber igb(&SLAM);
-
     ros::NodeHandle nodeHandler;
     ros::Subscriber sub = nodeHandler.subscribe("/camera/image_raw", 1, &ImageGrabber::GrabImage,&igb);
 
-    ros::spin();
-
+    while(ros::ok()){
+      ros::spinOnce();
+    }
     // Stop all threads
     SLAM.Shutdown();
 
@@ -90,7 +95,31 @@ void ImageGrabber::GrabImage(const sensor_msgs::ImageConstPtr& msg)
         return;
     }
 
+
     mpSLAM->TrackMonocular(cv_ptr->image,cv_ptr->header.stamp.toSec());
+
+
+    cv::Mat Tcw= mpSLAM->TrackMonocular(cv_ptr->image,cv_ptr->header.stamp.toSec());
+    
+  if(!Tcw.empty()){
+    cout << "Publish pose Started" << endl;
+    geometry_msgs::PoseStamped pose;
+    pose.header.stamp=ros::Time::now();
+    pose.header.frame_id="map";
+
+    cv::Mat Rwc = Tcw.rowRange(0,3).colRange(0,3).t(); // Rotation information
+    cv::Mat twc = -Rwc*Tcw.rowRange(0,3).col(3); // translation information
+    vector<float> q = ORB_SLAM2::Converter::toQuaternion(Rwc);
+
+    tf::Transform new_transform;
+    new_transform.setOrigin(tf::Vector3(twc.at<float>(0), twc.at<float>(1), twc.at<float>(2)));
+
+    tf::Quaternion quaternion(q[0], q[1], q[2], q[3]);
+    new_transform.setRotation(quaternion);
+
+    tf::poseTFToMsg(new_transform, pose.pose);
+    cout<< pose.pose << endl;
+    pose_pub.publish(pose);
+  }
+
 }
-
-
